@@ -76,8 +76,10 @@ NOTE: This is NOT MEANT to be used in place of Steam's own on-screen keyboard, a
 As this was meant for my personal use under Bazzite, and using Plasma, I'm only familiar with what it takes to be ran on there.
 
 1) uinput permissions/rules need set up correctly.  Look a the 'uinput' stuff in the 'vboard' projects above.
-2) Run using: python3 OSKewl.py
-(You can easily make it a shortcut...place OSKewl.py in your home folder, on your desktop create OSKewl.desk and make the contents:
+2) Just grab `OSKewl.py` from this repo
+3) Run using: python3 OSKewl.py
+ 
+(You can easily make it a shortcut...place OSKewl.py in your home folder, on your desktop create OSKewl.desktop and make the contents:
 
 ```
 [Desktop Entry]
