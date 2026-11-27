@@ -26,9 +26,16 @@ LAYOUT
     Mv Up / Mv Dn / Dock  move the window
 
 MODIFIERS (Shift, Ctrl, Alt, ⊞ Super, Fn)
-  click once  → sticky: applies to the next key, then releases itself
-  click twice → held: stays pressed until you click it a third time
+  click once            → sticky: applies to the next key, then releases itself
+  click again, quickly  → held: stays pressed until you click it once more
+  click again, slowly   → cancels the sticky state (a plain on/off toggle)
+  "Quickly" is the double-click time set in Options (default 400 ms; 0 turns
+  locking off so a modifier is only ever sticky or off).
   A sticky/held key is drawn highlighted (held ones also get a bar underneath).
+
+LETTER GLYPHS
+  Options can keep the letter keys always capital, always lowercase, or (the
+  default) following Shift / Caps Lock.
 
 CAVEATS
   • On Wayland, GTK cannot keep a window on top or stop it taking focus, and
@@ -346,6 +353,8 @@ DEFAULTS = {
     "spacing": 4,             # gap between keys, px
     "font": "Sans",
     "font_scale": 100,        # % of the auto-fit legend size
+    "glyph_case": "auto",     # letter legends: auto (follow Shift/Caps) | upper | lower
+    "lock_ms": 400,           # 2nd click within this many ms locks a modifier; 0 = never lock
     "opacity": 1.0,           # key faces
     "bg_opacity": 1.0,        # window + gaps between keys (own setting)
     "numpad": False,
@@ -391,6 +400,9 @@ def load_config():
     cfg["border_px"] = max(0, min(8, cfg["border_px"]))
     cfg["spacing"] = max(0, min(16, cfg["spacing"]))
     cfg["font_scale"] = max(50, min(200, cfg["font_scale"]))
+    if cfg["glyph_case"] not in ("auto", "upper", "lower"):
+        cfg["glyph_case"] = "auto"
+    cfg["lock_ms"] = max(0, min(3000, cfg["lock_ms"]))
     cfg["opacity"] = max(0.2, min(1.0, cfg["opacity"]))
     cfg["bg_opacity"] = max(0.0, min(1.0, cfg["bg_opacity"]))
     if cfg["bg_scale"] not in ("cover", "stretch", "contain"):
@@ -464,7 +476,8 @@ def rgba_to_hex(c):
 #               arrows, full numpad)
 # --------------------------------------------------------------------------
 LAYOUTS = {"windows": "Windows OSK", "standard": "Standard 104-key"}
-MOD_TIP = "Click: next key only · again: hold · again: release"
+MOD_TIP = ("Click: next key only · click again quickly: hold · "
+           "click again: release")
 X11_ONLY = ("mvup", "mvdn", "dock")      # window-moving keys, useless on Wayland
 
 
@@ -767,19 +780,23 @@ class KeyButton:
         self._shown = (base, None)
         self._classes = set()
 
-    def legends(self, shift, caps, fn_on):
+    def legends(self, shift, caps, fn_on, case="auto"):
         s = self.spec
         f = s.get("fn")
         if f and fn_on:
             return f[0], None
         if s.get("letter"):
+            if case == "upper":              # like a physical keycap
+                return s["alt"], None
+            if case == "lower":
+                return s["base"], None
             return (s["alt"] if shift != caps else s["base"]), None
         if self.dual:
             return (s["alt"], s["base"]) if shift else (s["base"], s["alt"])
         return s["base"], None
 
-    def refresh_legends(self, shift, caps, fn_on):
-        main, alt = self.legends(shift, caps, fn_on)
+    def refresh_legends(self, shift, caps, fn_on, case="auto"):
+        main, alt = self.legends(shift, caps, fn_on, case)
         if (main, alt) == self._shown:
             return
         self._shown = (main, alt)
@@ -815,6 +832,7 @@ class OSKewl(Gtk.Window):
 
         self.state = {c: 0 for c in MOD_CODES}      # 0 off · 1 sticky · 2 held
         self.state["fn"] = 0
+        self._mod_t = {}                            # when each modifier went sticky
         self.caps_on = False
         self.num_on = False
         self.faded = False
@@ -1227,8 +1245,9 @@ class OSKewl(Gtk.Window):
     def refresh(self):
         shift = any(self.state[c] for c in SHIFT_CODES)
         fn_on = bool(self.state["fn"])
+        case = self.cfg["glyph_case"]
         for kb in self.keys:
-            kb.refresh_legends(shift, self.caps_on, fn_on)
+            kb.refresh_legends(shift, self.caps_on, fn_on, case)
             kind = kb.spec["kind"]
             if kind == "mod":
                 st = self.state[kb.spec["code"]]
@@ -1321,7 +1340,16 @@ class OSKewl(Gtk.Window):
     def cycle_modifier(self, kb):
         key = "fn" if kb.spec["kind"] == "fn" else kb.spec["code"]
         old = self.state[key]
-        new = (old + 1) % 3
+        now = GLib.get_monotonic_time() / 1e6
+        window = self.cfg["lock_ms"] / 1000.0
+        if old == 0:                    # off -> sticky; start the double-click clock
+            new = 1
+            self._mod_t[key] = now
+        elif old == 1:                  # a quick 2nd click locks; a slow one cancels
+            quick = window > 0 and now - self._mod_t.get(key, 0.0) <= window
+            new = 2 if quick else 0
+        else:                           # held -> off
+            new = 0
         self.state[key] = new
         if key != "fn":                 # "held" = really holding the key down
             if new == 2:
@@ -1394,6 +1422,8 @@ class OSKewl(Gtk.Window):
         if key == "font_scale":
             self._px = (0, 0, 0)             # force a recompute on next allocate
             self.queue_resize()
+        if key == "glyph_case":
+            self.refresh()
         if key == "title":
             self._apply_title()
         if key == "bg_image":
@@ -1477,7 +1507,22 @@ class OSKewl(Gtk.Window):
         self._numpad_chk = chk
         add(None, chk)
 
+        def combo_for(key, choices):
+            cb = Gtk.ComboBoxText()
+            for cid, text in choices:
+                cb.append(cid, text)
+            cb.set_active_id(self.cfg[key])
+            cb.connect("changed", lambda w: self._set(key, w.get_active_id()))
+            return cb
+
         heading("Keys")
+        gc = combo_for("glyph_case", [
+            ("auto", "Follow Shift / Caps Lock"),
+            ("upper", "Always capital (A B C…)"),
+            ("lower", "Always lowercase (a b c…)")])
+        gc.set_tooltip_text("Case of the letters drawn on the alphabet keys. "
+                            "This only changes the legends, not what is typed.")
+        add("Letter key glyphs", gc)
         add("Border thickness (px)", spin("border_px", 0, 8))
         add("Key spacing (px)", spin("spacing", 0, 16))
         fb = Gtk.FontButton.new_with_font(self.cfg["font"])
@@ -1486,6 +1531,14 @@ class OSKewl(Gtk.Window):
         fb.connect("font-set", lambda w: self._set("font", w.get_font()))
         add("Legend font", fb)
         add("Legend size (%)", spin("font_scale", 50, 200, 5))
+
+        heading("Modifier keys (Shift, Ctrl, Alt, ⊞, Fn)")
+        lk = spin("lock_ms", 0, 3000, 50)
+        lk.set_tooltip_text(
+            "Click a modifier once: it applies to the next key. Click it again "
+            "within this time to lock it down; click it again after this time "
+            "and it simply turns off. 0 = never lock (sticky / off only).")
+        add("Double-click time to lock (ms, 0 = never)", lk)
 
         heading("Colours")
         add("Background", color("bg"))
@@ -1547,14 +1600,6 @@ class OSKewl(Gtk.Window):
             box.pack_start(btn, True, True, 0)
             box.pack_start(clr, False, False, 0)
             return box
-
-        def combo_for(key, choices):
-            cb = Gtk.ComboBoxText()
-            for cid, text in choices:
-                cb.append(cid, text)
-            cb.set_active_id(self.cfg[key])
-            cb.connect("changed", lambda w: self._set(key, w.get_active_id()))
-            return cb
 
         add("Background image", image_picker("bg_image"))
         add("Background scaling", combo_for("bg_scale", [
