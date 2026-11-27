@@ -16,7 +16,13 @@ OSKewl stock config
 
 
 # Huh? Whaaaa??
-So, I could only find VERY FEW virtual keyboards for Linux that I could easily get working under Bazzite.  I loved the simplicity and non-ugliness of MS Windows' built-in osk.exe On-Screen Keyboard, and so after using vboard ( https://github.com/mdev588/vboard) and then a later fork of it ( https://github.com/archisman-panigrahi/vboard ) and seeing how they worked and could easily be modified, I decided to set one up how I wanted...and probably nuked most of the original vboard DNA.
+So, I could only find VERY FEW virtual keyboards for Linux that I could easily get working under Bazzite.  I loved the simplicity and non-ugliness of MS Windows' built-in osk.exe On-Screen Keyboard, and I hate phone-style touch keyboard layouts...and so after using vboard ( https://github.com/mdev588/vboard) and then a later fork of it ( https://github.com/archisman-panigrahi/vboard ) and seeing how they worked and could easily be modified, I decided to set one up how I wanted...and probably nuked most of the original vboard DNA.
+
+
+
+
+# Non-obvious features + little touches
+- While the key glyphs change to follow and reflect the Shift/CapsLock status, there is an option to force letters to always show as Uppercase or Lowercase
 
 
 # Customization!
@@ -28,7 +34,9 @@ OSKewl ('OSK-ewl' -> 'oss-cool' -> ol' skool...you get the idea) is meant to be 
 - Backgrounds can be 'skinned' with a .png or .jpg and that gets stretched or cropped to fit the keyboard window.
 - Keys can also be skinned, but they ALL use a single image in common.  They can also be automatically cut up and/or scaled to fit any of the key sizes with or without gross stretching of the entire image
 - Custom key 'click' sound feedback can be enabled, either using one of the included simple sounds, or using your own .wav
-- Numpad area can be toggled
+- NumPad area can be toggled
+- [IN PROGRESS] Adding a way to change the shown glyphs/names keys in order to avoid stuff like font scaling turning 'Options' and other "wide" words on keys that end up abbreviating to 'Opt...' and so-on.  Maybe have a way to pick Unicode characters or something so graphical glyphs can also be used.
+  - If the above gets done and I figure out a decent way to do a character picker, then I will probably also add a way to flip to a totally custom layout grid that can type custom characters (think the 'emoji keyboard' function in a lot of phone keyboards)
 - Two layouts to switch between...the original Windows OSK layout, or a more accurate-to-a-physical-keyboard 104 key-ish layout.
 
 <img width="1243" height="337" alt="OSKewl_custom0" src="https://github.com/user-attachments/assets/5367d249-6803-4989-96d4-11d8c160e963" />
