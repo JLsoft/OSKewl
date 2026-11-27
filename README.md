@@ -35,7 +35,7 @@ OSKewl ('OSK-ewl' -> 'oss-cool' -> ol' skool...you get the idea) is meant to be 
 - Keys can also be skinned, but they ALL use a single image in common.  They can also be automatically cut up and/or scaled to fit any of the key sizes with or without gross stretching of the entire image
 - Custom key 'click' sound feedback can be enabled, either using one of the included simple sounds, or using your own .wav
 - NumPad area can be toggled
-- [IN PROGRESS] Adding a way to change the shown glyphs/names keys in order to avoid stuff like font scaling turning 'Options' and other "wide" words on keys that end up abbreviating to 'Opt...' and so-on.  Maybe have a way to pick Unicode characters or something so graphical glyphs can also be used.
+- [IN PROGRESS] Adding a way to change the shown glyphs/names keys in order to avoid stuff like font scaling turning 'Options' and other "wide" words on keys that end up abbreviating into 'Opt...' and so-on.  Maybe have a way to pick Unicode characters or something so graphical glyphs can also be used.
   - If the above gets done and I figure out a decent way to do a character picker, then I will probably also add a way to flip to a totally custom layout grid that can type custom characters (think the 'emoji keyboard' function in a lot of phone keyboards)
 - Two layouts to switch between...the original Windows OSK layout, or a more accurate-to-a-physical-keyboard 104 key-ish layout.
 
