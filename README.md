@@ -72,10 +72,13 @@ Make it look however you want, oof...
 
 # Installation and semi-requirements:
 NOTE: This is NOT MEANT to be used in place of Steam's own on-screen keyboard, and so I don't know if it is useable at all for games or anything.
+NOTE ALSO: It can not be used to log into the system
 
-As this was meant for my personal use under Bazzite, and using Plasma, I'm only familiar with what it takes to be ran on there.
 
-1) uinput permissions/rules need set up correctly.  Look a the 'uinput' stuff in the 'vboard' projects above.
+
+As this was meant for my personal use for interacting with the desktop under Bazzite (using Plasma), I'm only familiar with what it takes to be ran on there. No guarantees that you won't run into any problems with your setup
+
+1) uinput permissions/rules need set up correctly.  Look at the 'uinput' stuff needed in the installation instructions of the 'vboard' projects linked to at the top of this readme.
 2) Just grab `OSKewl.py` from this repo
 3) Run using: python3 OSKewl.py
  
