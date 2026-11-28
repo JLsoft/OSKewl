@@ -9,7 +9,7 @@ Windows stock On-Screen Keyboard
 
 <img width="1242" height="337" alt="OSKewl_custom1" src="https://github.com/user-attachments/assets/3bf92f4f-bb03-4c18-b1f3-6fba0e9820e2" />
 
-OSKewl stock config
+OSKewl stock config (with NumPad enabled to match the Win OSK above)
 
 
 
@@ -36,7 +36,7 @@ OSKewl ('OSK-ewl' -> 'oss-cool' -> ol' skool...you get the idea) is meant to be 
 - Keys can also be skinned, but they ALL use a single image in common.  They can also be automatically cut up and/or scaled to fit any of the key sizes with or without gross stretching of the entire image
 - Custom key 'click' sound feedback can be enabled, either using one of the included simple sounds, or using your own .wav
 - NumPad area can be toggled
-- You can customize what longer keys (ex: "NumPad", "Options", etc) actually say on them so you can avoid ',,,' abbreviations when resizing if you want, or you can use UNICODE graphical characters (like a making the "Options" key show a Unicode 'Gear' (⚙) character for example)
+- You can customize what longer keys (ex: "NumPad", "Options", etc) actually say on them so you can avoid '...' abbreviations when resizing if you want, or you can use UNICODE graphical characters (like a making the "Options" key show a Unicode 'Gear' (⚙) character for example)
 - Two layouts to switch between...the original Windows OSK layout, or a more accurate-to-a-physical-keyboard 104 key-ish layout.
 
 <img width="1243" height="337" alt="OSKewl_custom0" src="https://github.com/user-attachments/assets/5367d249-6803-4989-96d4-11d8c160e963" />
