@@ -1541,6 +1541,16 @@ class OSKewl(Gtk.Window):
         except Exception:
             return 768
 
+    def _screen_width(self):
+        try:
+            d = Gdk.Display.get_default()
+            gw = self.get_window()
+            m = (d.get_monitor_at_window(gw) if gw is not None
+                 else (d.get_primary_monitor() or d.get_monitor(0)))
+            return m.get_geometry().width
+        except Exception:
+            return 1024
+
     def show_options(self):
         if self._opt is not None:
             self._opt.present()
@@ -1557,7 +1567,10 @@ class OSKewl(Gtk.Window):
         sw.set_vexpand(True)
         sw.add(grid)
         dlg.get_content_area().pack_start(sw, True, True, 0)
-        dlg.set_default_size(700, min(680, max(260, self._screen_height() - 160)))
+        # Wide enough for the Key labels table (4 columns) and the long notes, so
+        # nothing is clipped on the sides before the dialog is resized
+        dlg.set_default_size(min(1000, max(400, self._screen_width() - 40)),
+                             min(680, max(260, self._screen_height() - 160)))
         row = [0]
 
         def sect(text):
