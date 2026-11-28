@@ -1,48 +1,45 @@
 #!/usr/bin/env python3
 """
-
 OSKewl -=- Joystick Lunatic Software (JLsoft) - 2026
-======
-Windows-style On-Screen Keyboard for Linux (Bazzite)
 
+On-screen keyboard for Linux (Bazzite), laid out like the Windows OSK.
 Clicking a key types it system-wide through a virtual /dev/uinput keyboard,
-exactly like pressing the physical key.
+the same as pressing the real key.
 
-WHAT IT NEEDS (all of it ships with a stock Bazzite / Fedora Atomic image)
-  • Python 3 + PyGObject + GTK 3
-  • Write access to /dev/uinput (input group membership or a udev rule)
-  • Nothing to pip/rpm-install: uinput is driven directly with fcntl/struct,
-    and sound uses whichever of pw-play / paplay / aplay is already present.
+Needs:
+  Python 3 + PyGObject + GTK 3   (already on a stock Bazzite)
+  Write access to /dev/uinput    (input group or a udev rule)
+  Nothing to pip install. uinput is driven with fcntl/struct, and sound goes
+  through whichever of pw-play / paplay / aplay is installed.
 
-LAYOUT
-  Mirrors the Windows OSK: Esc shares the number row, Del/Home/PgUp/... on the
-  right, arrow cluster beside the space bar, plus the OSK's own keys:
-    Fn      number row becomes F1–F12
-    Fade / Numpad     two half-height keys sharing one key slot: toggle
-                      translucency / show or hide the numeric keypad
-    Options / Layout  two half-height keys sharing one key slot: settings
-                      dialog / switch between the Windows OSK and the
-                      standard 104-key layout
-    Mv Up / Mv Dn / Dock  move the window
+The layout is the Windows OSK (Esc on the number row, Del/Home/PgUp etc. on
+the right, arrows by the space bar) plus its own keys:
+  Fn                     number row becomes F1-F12
+  Fade / Numpad          two half-height keys sharing one slot: a see-through
+                         toggle, and show/hide the numpad
+  Options / Layout       same deal: settings dialog, Windows OSK <-> 104-key
+  Mv Up / Mv Dn / Dock   move the window (X11 only)
 
-MODIFIERS (Shift, Ctrl, Alt, ⊞ Super, Fn)
-  click once            → sticky: applies to the next key, then releases itself
-  click again, quickly  → held: stays pressed until you click it once more
-  click again, slowly   → cancels the sticky state (a plain on/off toggle)
-  "Quickly" is the double-click time set in Options (default 400 ms; 0 turns
-  locking off so a modifier is only ever sticky or off).
-  A sticky/held key is drawn highlighted (held ones also get a bar underneath).
+Modifiers (Shift, Ctrl, Alt, Super, Fn):
+  click once            sticky: used on the next key, then released
+  click again fast      held: stays down until you click it again
+  click again slowly    just turns it off
+  "Fast" is the double-click time in Options (400 ms by default, 0 = never lock).
 
-LETTER GLYPHS
-  Options can keep the letter keys always capital, always lowercase, or (the
-  default) following Shift / Caps Lock.
+The letter keys can be set to always show capitals, always show lowercase, or
+follow Shift/Caps (Options -> Keys).
 
-CAVEATS
-  • On Wayland, GTK cannot keep a window on top or stop it taking focus, and
-    cannot move it (Mv Up / Mv Dn / Dock do nothing). Use an X11 session or a
-    layer-shell build if that matters.
-  • uinput sends scancodes, so the typed character follows the session's xkb
-    layout. Key legends assume US ANSI.
+A keycap image can be tinted when the keys are translucent (Options -> Images).
+
+Any key whose legend is longer than one character (Esc, Shift, Numpad, F1...)
+can be renamed in the [labels] section of the settings file. The Options
+dialog lists every key that can be renamed (Options -> Key labels).
+
+Known problems:
+  - Wayland: GTK can't keep a window on top, stop it taking focus or move it,
+    so Mv Up / Mv Dn / Dock do nothing there. Use X11 or a layer-shell build.
+  - uinput sends scancodes, so what gets typed follows the xkb layout. The
+    legends assume US ANSI.
 """
 import configparser
 import fcntl
@@ -61,8 +58,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402  (Gtk first!)
-try:                                              # ships with GTK 3; optional here
+from gi.repository import Gtk, Gdk, GLib, Pango  # noqa: E402
+try:                                              # Should be there, but don't die without it
     gi.require_version("GdkPixbuf", "2.0")
     from gi.repository import GdkPixbuf           # noqa: E402
 except (ValueError, ImportError):
@@ -71,9 +68,7 @@ except (ValueError, ImportError):
 CONFIG_DIR = os.path.expanduser("~/.config/oskewl")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "settings.conf")
 
-# --------------------------------------------------------------------------
-# evdev key codes (linux/input-event-codes.h)
-# --------------------------------------------------------------------------
+# evdev key codes, from linux/input-event-codes.h
 KEY = {
     "ESC": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6, "6": 7, "7": 8, "8": 9,
     "9": 10, "0": 11, "MINUS": 12, "EQUAL": 13, "BACKSPACE": 14, "TAB": 15,
@@ -96,22 +91,22 @@ KEY = {
 for _n, _c in enumerate(list(range(59, 69)) + [87, 88], 1):   # F1..F12
     KEY["F%d" % _n] = _c
 
+CODE_NAME = {c: n.lower() for n, c in KEY.items()}   # 1 -> "esc", used as label ids
+
 MOD_CODES = [KEY["LEFTSHIFT"], KEY["RIGHTSHIFT"], KEY["LEFTCTRL"],
              KEY["RIGHTCTRL"], KEY["LEFTALT"], KEY["RIGHTALT"],
              KEY["LEFTMETA"], KEY["RIGHTMETA"]]
 SHIFT_CODES = (KEY["LEFTSHIFT"], KEY["RIGHTSHIFT"])
 
 
-# --------------------------------------------------------------------------
-# /dev/uinput without the python-uinput package
-# --------------------------------------------------------------------------
+# Talking to /dev/uinput directly, no python-uinput needed
 def _ioc(direction, nr, size):
     return (direction << 30) | (size << 16) | (ord("U") << 8) | nr
 
 
 UI_DEV_CREATE = _ioc(0, 1, 0)
 UI_DEV_DESTROY = _ioc(0, 2, 0)
-UI_DEV_SETUP = _ioc(1, 3, 92)       # struct uinput_setup is 92 bytes
+UI_DEV_SETUP = _ioc(1, 3, 92)       # The struct uinput_setup is 92 bytes
 UI_SET_EVBIT = _ioc(1, 100, 4)
 UI_SET_KEYBIT = _ioc(1, 101, 4)
 EV_SYN, EV_KEY = 0, 1
@@ -119,7 +114,7 @@ BUS_VIRTUAL = 0x06
 
 
 class UInput:
-    """A virtual keyboard. emit(code, 1/0) presses / releases a key."""
+    # Virtual keyboard. emit(code, 1) presses a key, emit(code, 0) releases it.
 
     def __init__(self, codes, name="OSKewl"):
         self.fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
@@ -163,8 +158,8 @@ class UInput:
 
 
 def read_led(name):
-    """True/False from the keyboard LED for 'capslock' / 'numlock', or None
-    when the system exposes no such LED (then we just track state ourselves)."""
+    # True/False from the keyboard LED ('capslock' / 'numlock'), or None if there
+    # is no such LED (then we just keep track ourselves).
     paths = glob.glob("/sys/class/leds/*::%s/brightness" % name)
     if not paths:
         return None
@@ -178,16 +173,14 @@ def read_led(name):
     return False
 
 
-# --------------------------------------------------------------------------
-# Click sound — stdlib only; plays through whatever CLI player is installed
-# --------------------------------------------------------------------------
-SOUND_VERSION = 1       # bump when a preset's recipe changes so caches regenerate
+# Click sound (stdlib only, shells out to whichever player is installed)
+SOUND_VERSION = 1       # Bump this if you change a preset, because the old wavs are cached
 DEFAULT_SOUND = "click"
-# Subtle, short key sounds, synthesised on first use (no files shipped).
-#   tones : (Hz, decay seconds, amplitude) decaying sines
-#   sweep : (start Hz, end Hz, sweep time, decay, amplitude) for a pitch drop
-#   noise : (amplitude, decay, low-pass 0..1 — smaller = duller)
-#   level : final peak volume, kept low on purpose
+# Short, quiet key sounds, made on first use (no files shipped).
+#   tones : (Hz, decay secs, amplitude) decaying sines
+#   sweep : (start Hz, end Hz, sweep time, decay, amplitude) pitch drop
+#   noise : (amplitude, decay, low-pass 0..1; smaller = duller)
+#   level : final peak volume, kept low on purpose (it was way too loud at first)
 SOUNDS = {
     "click": dict(label="Soft click", len=0.035, level=0.40,
                   tones=[(2600, 0.0035, 0.50), (190, 0.009, 0.45)],
@@ -259,7 +252,7 @@ def synth_sound(p, rate=44100):
             s *= (n - i) / tail
         out.append(s)
     echoes = p.get("echo")
-    if echoes:                      # extra delayed, quieter copies (e.g. key-up)
+    if echoes:                      # Delayed, quieter copies; this fakes the key-up
         mixed = out + [0.0] * int(rate * max(d for d, _ in echoes))
         for delay, gain in echoes:
             off = int(rate * delay)
@@ -278,7 +271,7 @@ class ClickPlayer:
         self._procs = []                 # (Popen, start time)
 
     @property
-    def cmd(self):                       # truthy while some player is usable
+    def cmd(self):                       # None if there's nothing to play with
         return self.cmds[0] if self.cmds else None
 
     def preset_file(self, preset):
@@ -287,7 +280,7 @@ class ClickPlayer:
         path = os.path.join(CONFIG_DIR, "sounds",
                             "%s_v%d.wav" % (preset, SOUND_VERSION))
         if os.path.isfile(path) and os.path.getsize(path) > 44:
-            return path                  # (a 44-byte file is a header with no audio)
+            return path                  # 44 bytes is a header with no audio, so the file is broken
         tmp = path + ".tmp"
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -296,20 +289,20 @@ class ClickPlayer:
                 w.setsampwidth(2)
                 w.setframerate(44100)
                 w.writeframes(synth_sound(SOUNDS[preset]))
-            os.replace(tmp, path)        # atomic: never leaves a half-written wav
+            os.replace(tmp, path)        # So we never end up with half a wav
             return path
         except OSError:
             return None
 
     def _reap(self):
-        """Drop finished players; kill hung ones; fall back to the next player
-        if the current one exits with an error (e.g. pw-play without PipeWire)."""
+        # Clean up finished players, kill stuck ones, and move on to the next
+        # player if this one errors out (pw-play without PipeWire).
         now = GLib.get_monotonic_time() / 1e6
         alive = []
         for proc, t0 in self._procs:
             rc = proc.poll()
             if rc is None:
-                if now - t0 > 3.0:       # a click is milliseconds; this is hung
+                if now - t0 > 3.0:       # A click takes milliseconds, so this one is stuck
                     proc.kill()
                     proc.wait()
                 else:
@@ -319,7 +312,7 @@ class ClickPlayer:
         self._procs = alive
 
     def play(self, path="", preset=DEFAULT_SOUND):
-        """Play a custom file if given and readable, else the built-in preset."""
+        # Custom file if there is one, otherwise the preset
         if not self.cmds:
             return
         if not (path and os.path.isfile(path)):
@@ -327,7 +320,7 @@ class ClickPlayer:
         if not path:
             return
         self._reap()
-        if len(self._procs) >= 8:        # don't pile up on rapid key repeat
+        if len(self._procs) >= 8:        # Don't stack up players while a key is repeating
             return
         try:
             self._procs.append((subprocess.Popen(
@@ -335,40 +328,40 @@ class ClickPlayer:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL),
                 GLib.get_monotonic_time() / 1e6))
         except OSError:
-            if len(self.cmds) > 1:       # try the next player next time
+            if len(self.cmds) > 1:       # Use the next player next time
                 self.cmds.pop(0)
 
 
-# --------------------------------------------------------------------------
 # Settings
-# --------------------------------------------------------------------------
 DEFAULTS = {
     "layout": "windows",      # "windows" or "standard"
-    "bg": "#1a1a1a",          # window background (what shows between keys)
-    "key": "#303030",         # key face
-    "text": "#ffffff",        # legends
-    "border": "#5e5e5e",      # key borders
-    "highlight": "#0078d7",   # sticky / held / lock-on keys
+    "bg": "#1a1a1a",          # Window background (what shows between keys)
+    "key": "#303030",         # Key face
+    "text": "#ffffff",        # Legends
+    "border": "#5e5e5e",      # Key borders
+    "highlight": "#0078d7",   # Sticky / held / lock-on keys
     "border_px": 1,
-    "spacing": 4,             # gap between keys, px
+    "spacing": 4,             # Gap between keys, in px
     "font": "Sans",
-    "font_scale": 100,        # % of the auto-fit legend size
-    "glyph_case": "auto",     # letter legends: auto (follow Shift/Caps) | upper | lower
-    "lock_ms": 400,           # 2nd click within this many ms locks a modifier; 0 = never lock
-    "opacity": 1.0,           # key faces
-    "bg_opacity": 1.0,        # window + gaps between keys (own setting)
+    "font_scale": 100,        # Percent of the auto-fit legend size
+    "glyph_case": "auto",     # Letter keys: auto = follow Shift/Caps, upper, lower
+    "lock_ms": 400,           # A 2nd click within this many ms locks a modifier, 0 = never
+    "opacity": 1.0,           # Key faces
+    "bg_opacity": 1.0,        # Window + gaps between keys, separate from key opacity
     "numpad": False,
     "sound": False,
-    "sound_preset": DEFAULT_SOUND,   # built-in sound
-    "sound_file": "",         # custom file; overrides the preset when set
-    "bg_image": "",           # png / jpeg behind the keys
+    "sound_preset": DEFAULT_SOUND,   # Built-in sound
+    "sound_file": "",         # Custom file; overrides the preset when set
+    "bg_image": "",           # PNG / JPEG behind the keys
     "bg_scale": "cover",      # cover (fill + crop) | stretch | contain (fit)
-    "keycap_image": "",       # png / jpeg used as every key's face
+    "keycap_image": "",       # PNG / JPEG used as every key's face
     "keycap_mode": "slice",   # slice (keep edges, stretch middle) | stretch
-    "keycap_slice": 0,        # edge size in image px for "slice"; 0 = auto
-    "title": "OSKewl",   # title bar text (empty = none)
+    "keycap_slice": 0,        # Edge size in image px for "slice"; 0 = auto
+    "keycap_tint_on": False,  # Tint the keys when a keycap image is used and the keys are translucent
+    "keycap_tint": "#000000", # Tint colour
+    "title": "OSKewl",   # Title bar text (empty = none)
     "title_px": 13,
-    "title_h": 30,            # title bar height, px
+    "title_h": 30,            # Title bar height, in px
     "width": 1100,
     "height": 340,
 }
@@ -377,11 +370,20 @@ _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 def load_config():
     cfg = dict(DEFAULTS)
-    p = configparser.ConfigParser(interpolation=None)
+    cfg["labels"] = {}
+    # strict=False so a duplicated line from hand-editing doesn't throw the whole file out
+    p = configparser.ConfigParser(interpolation=None, strict=False)
     try:
-        p.read(CONFIG_FILE)
-    except configparser.Error:
+        p.read(CONFIG_FILE, encoding="utf-8")
+    except (configparser.Error, UnicodeError) as e:
+        print("Warning: cannot read %s (%s), using defaults. A copy of the "
+              "file is kept as .bad" % (CONFIG_FILE, e), file=sys.stderr)
+        try:
+            shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bad")
+        except OSError:
+            pass
         return cfg
+    cfg["labels"] = read_labels(p)
     for k, d in DEFAULTS.items():
         try:
             if isinstance(d, bool):
@@ -394,7 +396,7 @@ def load_config():
                 cfg[k] = p.get("oskewl", k)
         except (configparser.Error, ValueError):
             pass
-    for k in ("bg", "key", "text", "border", "highlight"):
+    for k in ("bg", "key", "text", "border", "highlight", "keycap_tint"):
         if not _HEX.match(str(cfg[k])):
             cfg[k] = DEFAULTS[k]
     cfg["border_px"] = max(0, min(8, cfg["border_px"]))
@@ -421,20 +423,32 @@ def load_config():
     return cfg
 
 
+LABELS_HELP = """
+# Key legends. Put new text after the = sign to rename a key's legend, for
+# example "numpad = Num". Leave a line empty to keep the default text.
+# Only the text drawn on the key changes, not what it types.
+# Edit this while OSKewl is closed: the file is rewritten when it quits.
+"""
+
+
 def save_config(cfg):
     p = configparser.ConfigParser(interpolation=None)
-    p["oskewl"] = {k: str(v) for k, v in cfg.items()}
+    p["oskewl"] = {k: str(v) for k, v in cfg.items() if k != "labels"}
+    # Every renamable key is written out (empty = default) so the file works as a template
+    labels = cfg.get("labels", {})
+    lp = configparser.ConfigParser(interpolation=None)
+    lp["labels"] = {k: labels.get(k, "") for k in label_catalog()}
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w") as f:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             p.write(f)
+            f.write(LABELS_HELP)
+            lp.write(f)
     except OSError as e:
         print("Warning: could not write settings (%s)" % e, file=sys.stderr)
 
 
-# --------------------------------------------------------------------------
 # Colour helpers
-# --------------------------------------------------------------------------
 def hex_rgb(h):
     h = h.lstrip("#")
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
@@ -468,17 +482,14 @@ def rgba_to_hex(c):
     return rgb_hex((c.red * 255, c.green * 255, c.blue * 255))
 
 
-# --------------------------------------------------------------------------
-# Layouts. Grid units: 1 column = 1/4 of a standard key; a key row is 2 grid
-# rows, so half-height gaps and tall keys (numpad + / Enter) are possible.
-#   "windows"   Windows On-Screen Keyboard
-#   "standard"  US 104-key hardware layout (F-row, 3×2 nav block, inverted-T
-#               arrows, full numpad)
-# --------------------------------------------------------------------------
+# Layouts. 1 grid column = 1/4 of a normal key, and a key row is 2 grid rows,
+# so half-height keys and tall ones (numpad + and Enter) work out.
+#   windows   = the Windows OSK
+#   standard  = plain US 104-key keyboard
 LAYOUTS = {"windows": "Windows OSK", "standard": "Standard 104-key"}
 MOD_TIP = ("Click: next key only · click again quickly: hold · "
            "click again: release")
-X11_ONLY = ("mvup", "mvdn", "dock")      # window-moving keys, useless on Wayland
+X11_ONLY = ("mvup", "mvdn", "dock")      # These do nothing on Wayland
 
 
 def is_wayland():
@@ -509,7 +520,7 @@ def _act(name, label, tip, w=4, **kw):
 
 
 def _split(L, r, col, top, bottom):
-    """Two half-height keys stacked in the space of one normal key."""
+    # Two half-height keys stacked in the space of one normal key
     L.row(r, col, [top], rs=1)
     L.row(r + 1, col, [bottom], rs=1)
 
@@ -598,7 +609,7 @@ def _layout_windows(wayland):
     L.spacer(62, 0, 1, 10)
     for i, row in enumerate(nav):
         L.row(2 * i, 63, row, expect=8 if i in (0, 3) else 12)
-    # right-hand column = keyboard controls
+    # The right-hand column is the OSK's own buttons
     _split(L, 0, 71, *_fade_numpad())
     _split(L, 6, 71, *_opt_layout())
     L.row(8, 71, [_act("dock", "Dock", "Dock to the bottom of the screen (X11 only)")],
@@ -641,8 +652,8 @@ def _layout_std(wayland):
                   _mod("RIGHTMETA", "⊞", 5, "Super / Windows key. " + MOD_TIP),
                   _ch("COMPOSE", "☰", w=5, tip="Menu"),
                   _mod("RIGHTCTRL", "Ctrl", 5)], expect=60)
-    # nav block: PrtSc/ScrLk/Pause, Ins/Home/PgUp, Del/End/PgDn, arrows below.
-    # The empty Caps-row cells carry the keyboard's own controls.
+    # Nav block: PrtSc/ScrLk/Pause, Ins/Home/PgUp, Del/End/PgDn, arrows below.
+    # The empty spots in the caps row hold the OSK buttons.
     L.row(0, 62, [_ch("SYSRQ", "PrtScn"), _ch("SCROLLLOCK", "ScrLk"),
                   _ch("PAUSE", "Pause")], expect=12)
     L.row(3, 62, [_ch("INSERT", "Insert"), _ch("HOME", "Home"),
@@ -677,15 +688,81 @@ def build_layout(name, wayland):
     return (_layout_std if name == "standard" else _layout_windows)(wayland)
 
 
-# --------------------------------------------------------------------------
-# Keycap image scaling (GdkPixbuf; GTK 3 CSS can't draw a 9-slice centre)
-# --------------------------------------------------------------------------
+# Renamable legends. A key can be renamed if its legend is longer than one
+# character. Its id is the evdev name in lowercase ("esc", "leftshift", "kpenter"),
+# or the action name for the OSK's own buttons ("numpad", "options", "dock").
+# The F1-F12 shown on the number row while Fn is on use the ids "f1".."f12".
+LABEL_MAX = 16          # Longest legend accepted, in characters
+_CATALOG = None
+
+
+def label_id(spec):
+    if spec["kind"] == "action":
+        return spec["action"]
+    if spec["kind"] == "fn":
+        return "fn"
+    return CODE_NAME[spec["code"]]
+
+
+def label_catalog():
+    # {id: {"defaults": {layout: text}, "fn": layouts where it's only the Fn legend,
+    #       "x11": True if the key only exists on X11}}, in layout order
+    global _CATALOG
+    if _CATALOG is None:
+        cat = {}
+
+        def note(kid, lid, text, fn=False, x11=False):
+            e = cat.setdefault(kid, dict(defaults={}, fn=set(), x11=False))
+            e["defaults"][lid] = text
+            if fn:
+                e["fn"].add(lid)
+            e["x11"] = e["x11"] or x11
+        for lid in LAYOUTS:
+            for spec, *_ in build_layout(lid, False).keys:
+                f = spec.get("fn")
+                if f:
+                    note(f[0].lower(), lid, f[0], fn=True)
+                if len(spec["base"]) > 1:
+                    note(label_id(spec), lid, spec["base"],
+                         x11=spec.get("action") in X11_ONLY)
+        _CATALOG = cat
+    return _CATALOG
+
+
+def read_labels(parser):
+    out = {}
+    if not parser.has_section("labels"):
+        return out
+    known = label_catalog()
+    for k, v in parser.items("labels"):
+        v = v.strip()[:LABEL_MAX]
+        if k not in known:
+            print("Warning: [labels] has an unknown key name '%s', ignored" % k,
+                  file=sys.stderr)
+        elif v:
+            out[k] = v
+    return out
+
+
+def apply_labels(spec, labels):
+    # A copy of the key spec with the user's legends swapped in
+    if not labels:
+        return spec
+    new = {}
+    f = spec.get("fn")
+    if f and labels.get(f[0].lower()):
+        new["fn"] = (labels[f[0].lower()], f[1])
+    if len(spec["base"]) > 1 and labels.get(label_id(spec)):
+        new["base"] = labels[label_id(spec)]
+    return dict(spec, **new) if new else spec
+
+
+# Keycap image scaling. GTK 3 CSS can't do a 9-slice centre, so GdkPixbuf does it
 def render_keycap(src, w, h, mode, slice_px, unit_h):
-    """Scale `src` to w×h. "stretch" squashes it whole. "slice" cuts it into a
-    3×3 grid: the four corners and four edges keep their proportions (edge
-    size shown on screen = slice scaled as if the image were one key tall,
-    unit_h px) and only the middle stretches — so bevels stay crisp on wide
-    keys like Space and Enter."""
+    # "stretch" squashes the whole image into w x h.
+    # "slice" cuts it into 3x3: the corners and edges keep their shape and only
+    # the middle stretches, so bevels stay sharp on wide keys (Space, Enter).
+    # The edge size on screen is scaled as if the image were one key tall (unit_h).
     interp = GdkPixbuf.InterpType.BILINEAR
     sw, sh = src.get_width(), src.get_height()
     if mode != "slice" or w < 6 or h < 6:
@@ -711,16 +788,14 @@ def render_keycap(src, w, h, mode, slice_px, unit_h):
     return dst
 
 
-# --------------------------------------------------------------------------
-# One on-screen key
-# --------------------------------------------------------------------------
+# A single key
 class KeyButton:
     def __init__(self, spec):
         self.spec = spec
         base = spec["base"]
         self.is_text = len(base) > 1
         self.dual = bool(spec.get("alt")) and not spec.get("letter")
-        self.half = spec.get("rs") == 1          # half-height key: small, centred
+        self.half = spec.get("rs") == 1          # Half-height key, small centred text
 
         self.button = Gtk.Button()
         self.button.set_can_focus(False)
@@ -736,11 +811,11 @@ class KeyButton:
         if self.half:
             self.main.set_halign(Gtk.Align.CENTER)
             self.main.set_valign(Gtk.Align.CENTER)
-        elif self.dual:                          # dual keys: main at the bottom
+        elif self.dual:                          # Dual-legend keys: the main one goes on the bottom
             self.main.set_halign(Gtk.Align.CENTER)
             self.main.set_valign(Gtk.Align.END)
             self.main.set_margin_bottom(5)
-        elif self.is_text:                     # named keys: top-left, like Windows
+        elif self.is_text:                     # Named keys go top-left, like Windows
             self.main.set_halign(Gtk.Align.START)
             self.main.set_valign(Gtk.Align.START)
             self.main.set_margin_start(8)
@@ -758,13 +833,13 @@ class KeyButton:
         self.alt.set_no_show_all(True)
         self.alt.set_visible(False)
 
-        # Stack: keycap image (optional) < tint (hover/active feedback over
-        # the image) < main legend < small legend.
-        # The cap must be a WINDOWLESS widget (an empty Box, not a DrawingArea):
-        # a DrawingArea owns a GdkWindow that sits above the button's event
-        # window and swallows the pointer, so only the border strip around it
-        # still reached the button (no hover, no click on the key's middle).
-        self.cap = Gtk.Box()                     # draws the keycap; has no size of its own
+        # Stack, bottom to top: keycap image (optional), tint (hover/pressed
+        # colour over the image), main legend, small legend.
+        # The cap has to be a windowless widget, so it's an empty Box. My first
+        # try was a DrawingArea and it ate the mouse: only the border strip
+        # around it still reached the button (no hover or click in the middle
+        # of a key).
+        self.cap = Gtk.Box()                     # Paints the keycap; has no size of its own
         self.cap.set_size_request(1, 1)
         self.cap.set_no_show_all(True)
         self.cap.set_visible(False)
@@ -780,23 +855,23 @@ class KeyButton:
         self._shown = (base, None)
         self._classes = set()
 
-    def legends(self, shift, caps, fn_on, case="auto"):
+    def legends(self, shift, caps, fn_on, lcase="auto"):
         s = self.spec
         f = s.get("fn")
         if f and fn_on:
             return f[0], None
         if s.get("letter"):
-            if case == "upper":              # like a physical keycap
+            if lcase == "upper":              # Like a physical keycap
                 return s["alt"], None
-            if case == "lower":
+            if lcase == "lower":
                 return s["base"], None
             return (s["alt"] if shift != caps else s["base"]), None
         if self.dual:
             return (s["alt"], s["base"]) if shift else (s["base"], s["alt"])
         return s["base"], None
 
-    def refresh_legends(self, shift, caps, fn_on, case="auto"):
-        main, alt = self.legends(shift, caps, fn_on, case)
+    def refresh_legends(self, shift, caps, fn_on, lcase="auto"):
+        main, alt = self.legends(shift, caps, fn_on, lcase)
         if (main, alt) == self._shown:
             return
         self._shown = (main, alt)
@@ -820,9 +895,7 @@ class KeyButton:
                 self._classes.discard(name)
 
 
-# --------------------------------------------------------------------------
-# The keyboard window
-# --------------------------------------------------------------------------
+# Main window
 class OSKewl(Gtk.Window):
     def __init__(self, uin, player):
         super().__init__(title="OSKewl", name="toplevel")
@@ -830,21 +903,22 @@ class OSKewl(Gtk.Window):
         self.player = player
         self.cfg = load_config()
 
-        self.state = {c: 0 for c in MOD_CODES}      # 0 off · 1 sticky · 2 held
+        self.state = {c: 0 for c in MOD_CODES}      # 0 = off, 1 = sticky, 2 = held
         self.state["fn"] = 0
-        self._mod_t = {}                            # when each modifier went sticky
+        self._sticky_time = {}                            # When each modifier went sticky
         self.caps_on = False
         self.num_on = False
         self.faded = False
-        self._lock_hold_until = 0.0
-        self._px = (22, 14, 13)                     # main / text / alt legend px
-        self._css_pending = False
+        self._leds_ignore_till = 0.0
+        self._px = (22, 14, 13)                     # Main / text / alt legend px
+        self._css_queued = False
         self._opt = None
         self._numpad_chk = None
         self._layout_cmb = None
-        self._delay_src = self._repeat_src = None
+        self._label_cells = {}                      # Options dialog: id -> "shown now" label
+        self._rep_delay_id = self._rep_id = None
         self._repeat_code, self._repeat_mods = None, []
-        self.keys, self.by_button, self.numpad_widgets = [], {}, []
+        self.keys, self.btn_map, self.kp_widgets = [], {}, []
         self.wayland = is_wayland()
         self._cap_src, self._cap_cache, self._unit_h = None, {}, 50.0
         self._cols = self._cols_num = 1
@@ -862,9 +936,10 @@ class OSKewl(Gtk.Window):
         screen = self.get_screen()
         visual = screen.get_rgba_visual()
         if visual is not None and screen.is_composited():
-            # RGBA visual so CSS alpha works. Do NOT set_app_paintable(True):
-            # that stops GTK painting the window background at all, which made
-            # the gaps between keys transparent whatever the opacity said.
+            # Need the RGBA visual for CSS alpha. Don't set_app_paintable(True)
+            # here: I tried it and GTK stops painting the window background
+            # completely, so the gaps between keys went see-through whatever
+            # the opacity was set to.
             self.set_visual(visual)
 
         self.header = Gtk.HeaderBar()
@@ -879,13 +954,13 @@ class OSKewl(Gtk.Window):
         self.grid.set_column_homogeneous(True)
         for side in ("start", "end", "top", "bottom"):
             getattr(self.grid, "set_margin_" + side)(4)
-        # The background image lives on this box (not the window) so it covers
-        # exactly the key area, margins included, and scales with it.
+        # The bg image is drawn on this box instead of the window, so it covers
+        # just the key area (margins too) and scales with it.
         self.area = Gtk.Box()
         self.area.set_name("kbarea")
         self.area.pack_start(self.grid, True, True, 0)
-        # User handlers run before the Box's own draw, so the image is painted
-        # first and the keys land on top of it.
+        # Our handler runs before the Box's own draw, so the image goes down
+        # first and the keys get painted over it.
         self.area.connect("draw", self._on_bg_draw)
         self.add(self.area)
         self._bg_src, self._bg_cache = None, None
@@ -903,15 +978,15 @@ class OSKewl(Gtk.Window):
         self.connect("configure-event", self.on_configure)
         GLib.timeout_add(500, self._sync_leds)
 
-    # ------------------------------------------------------------- building
+    # Building
     def _build_grid(self):
         lay = build_layout(self.cfg["layout"], self.wayland)
         self._cols, self._cols_num, self._units = lay.cols, lay.cols_num, lay.units
-        self.keys, self.by_button, self.numpad_widgets = [], {}, []
+        self.keys, self.btn_map, self.kp_widgets = [], {}, []
         for spec, col, row, cs, rs, group in lay.keys:
-            kb = KeyButton(spec)
+            kb = KeyButton(apply_labels(spec, self.cfg["labels"]))
             self.keys.append(kb)
-            self.by_button[kb.button] = kb
+            self.btn_map[kb.button] = kb
             b = kb.button
             if spec["kind"] == "action":
                 b.connect("clicked", self.on_action, kb)
@@ -924,19 +999,19 @@ class OSKewl(Gtk.Window):
             kb.set_cap_active(self._cap_src is not None)
             self.grid.attach(b, col, row, cs, rs)
             if group == "numpad":
-                self.numpad_widgets.append(b)
-        # Invisible boxes hold the gaps open: an empty grid column/row collapses.
+                self.kp_widgets.append(b)
+        # Empty grid columns/rows collapse, so these invisible boxes hold the gaps open
         for col, row, cs, rs, group in lay.spacers:
             box = Gtk.Box()
             self.grid.attach(box, col, row, cs, rs)
             if group == "numpad":
-                self.numpad_widgets.append(box)
-        for w in self.numpad_widgets:
-            w.show_all()                 # show the labels inside the keys first:
-            w.set_no_show_all(True)      # no_show_all would otherwise skip them
+                self.kp_widgets.append(box)
+        for w in self.kp_widgets:
+            w.show_all()                 # The labels inside the keys need this first
+            w.set_no_show_all(True)      # Otherwise a later show_all skips them
         self._apply_cap_opacity()
 
-    # ------------------------------------------------------ background image
+    # Background image
     def _load_bg(self):
         self._bg_src, self._bg_cache = None, None
         path = self.cfg["bg_image"]
@@ -980,11 +1055,11 @@ class OSKewl(Gtk.Window):
         cr.rectangle(0, 0, w, h)
         cr.clip()
         Gdk.cairo_set_source_pixbuf(cr, pb, (w - dw) // 2, (h - dh) // 2)
-        cr.paint_with_alpha(alpha)      # <- the background-opacity slider
+        cr.paint_with_alpha(alpha)      # This is where the bg opacity slider takes effect
         cr.restore()
         return False
 
-    # ---------------------------------------------------------- keycap image
+    # Keycap image
     def _load_keycap(self):
         self._cap_src, self._cap_cache = None, {}
         path = self.cfg["keycap_image"]
@@ -1047,8 +1122,22 @@ class OSKewl(Gtk.Window):
         self.grid.show_all()
         self._apply_numpad()
         self.refresh()
+        self._refresh_label_cells()
         self._px = (0, 0, 0)
         self.queue_resize()
+
+    def _label_markup(self, kid):
+        # What the key shows right now (custom legends in bold)
+        custom = self.cfg["labels"].get(kid)
+        if custom:
+            return "<b>%s</b>" % GLib.markup_escape_text(custom)
+        d = label_catalog()[kid]["defaults"]
+        return GLib.markup_escape_text(
+            d.get(self.cfg["layout"]) or next(iter(d.values())))
+
+    def _refresh_label_cells(self):
+        for kid, cell in self._label_cells.items():
+            cell.set_markup(self._label_markup(kid))
 
     def _cols_now(self):
         return self._cols_num if self.cfg["numpad"] else self._cols
@@ -1065,14 +1154,14 @@ class OSKewl(Gtk.Window):
         save_config(self.cfg)
         self.rebuild_layout()
         if chrome is not None and not self.is_maximized():
-            # keep the keys roughly square in the new layout
+            # Try to keep the keys roughly square after the switch
             body = (w - 8) * 2.0 * self._units / self._cols_now() + 8
             self.resize(w, int(body + chrome))
         if self._layout_cmb is not None:
             self._layout_cmb.set_active_id(name)
 
     def finish_show(self):
-        """Call right after show_all()."""
+        # Call right after show_all()
         self._apply_numpad()
         self._sync_leds(force=True)
         self.refresh()
@@ -1083,10 +1172,10 @@ class OSKewl(Gtk.Window):
         self.set_title(t or "OSKewl")
 
     def _apply_numpad(self):
-        for w in self.numpad_widgets:
+        for w in self.kp_widgets:
             w.set_visible(self.cfg["numpad"])
 
-    # ----------------------------------------------------------------- CSS
+    # CSS
     def build_css(self):
         c = self.cfg
         a = min(c["opacity"], 0.35) if self.faded else c["opacity"]
@@ -1106,8 +1195,13 @@ class OSKewl(Gtk.Window):
         lo, hi_m = sp // 2, sp - sp // 2
         m_px, t_px, a_px = self._px
         h_px = max(7, int(t_px * 0.9))
-        # The background image is NOT set in CSS: GTK 3 CSS cannot fade an
-        # image, so it is painted by _on_bg_draw() with the background opacity.
+        # Tint laid over the keycap image, only while the keys are translucent.
+        # The more see-through the keys are, the stronger the tint.
+        tint_bg = "transparent"
+        if self._cap_src is not None and c["keycap_tint_on"] and a < 1.0:
+            tint_bg = rgba_css(c["keycap_tint"], (1.0 - a) * 0.6)
+        # The bg image is not done in CSS because GTK 3 CSS can't fade an image.
+        # _on_bg_draw() paints it with the bg opacity instead.
 
         return f"""
         #toplevel {{ background-color: {rgba_css(bg, ab)}; }}
@@ -1155,7 +1249,7 @@ class OSKewl(Gtk.Window):
             background-color: {rgba_css(text, a)}; border-color: {text};
         }}
 
-        /* keycap image supplies the key face; tint gives state feedback over it */
+        /* The keycap image supplies the key face; the tint gives state feedback over it */
         #grid button.key.capped, #grid button.key.capped:hover,
         #grid button.key.capped:focus, #grid button.key.capped:active,
         #grid button.key.capped.latched, #grid button.key.capped.latched:hover,
@@ -1164,7 +1258,7 @@ class OSKewl(Gtk.Window):
             background-image: none; background-color: transparent;
             border-color: transparent; box-shadow: none;
         }}
-        #grid button.key .key-tint {{ background-color: transparent; }}
+        #grid button.key .key-tint {{ background-color: {tint_bg}; }}
         #grid button.key.capped:hover .key-tint {{
             background-color: alpha({hi}, 0.28);
         }}
@@ -1212,20 +1306,20 @@ class OSKewl(Gtk.Window):
         except GLib.GError as e:
             print("CSS error: %s" % e.message, file=sys.stderr)
         self._apply_cap_opacity()
-        self.area.queue_draw()          # background image follows opacity / fade / scaling
+        self.area.queue_draw()          # The bg image has to be redrawn too
 
     def _schedule_css(self):
-        if not self._css_pending:
-            self._css_pending = True
+        if not self._css_queued:
+            self._css_queued = True
             GLib.idle_add(self._css_idle)
 
     def _css_idle(self):
-        self._css_pending = False
+        self._css_queued = False
         self.apply_css()
         return False
 
     def on_grid_alloc(self, grid, alloc):
-        """Scale the legends with the keys so resizing the window stays tidy."""
+        # Legends scale with the keys so resizing doesn't look silly
         key_px = max(10.0, min(4.0 * alloc.width / self._cols_now(),
                                2.0 * alloc.height / self._units))
         self._unit_h = 2.0 * alloc.height / self._units
@@ -1241,13 +1335,13 @@ class OSKewl(Gtk.Window):
             self.cfg["width"], self.cfg["height"] = self.get_size()
         return False
 
-    # ------------------------------------------------------ state → visuals
+    # State to visuals
     def refresh(self):
         shift = any(self.state[c] for c in SHIFT_CODES)
         fn_on = bool(self.state["fn"])
-        case = self.cfg["glyph_case"]
+        lcase = self.cfg["glyph_case"]
         for kb in self.keys:
-            kb.refresh_legends(shift, self.caps_on, fn_on, case)
+            kb.refresh_legends(shift, self.caps_on, fn_on, lcase)
             kind = kb.spec["kind"]
             if kind == "mod":
                 st = self.state[kb.spec["code"]]
@@ -1260,9 +1354,10 @@ class OSKewl(Gtk.Window):
             kb.set_classes(latched=(st == 1) or on, locked=(st == 2))
 
     def _sync_leds(self, force=False):
-        """Follow the real Caps/Num Lock LEDs so labels stay right when a
-        physical keyboard toggles them. No LED exposed → local tracking only."""
-        if force or GLib.get_monotonic_time() / 1e6 >= self._lock_hold_until:
+        # Copy the real Caps/Num Lock LEDs so the labels stay right when a
+        # physical keyboard toggles them. With no LED on this system, we just
+        # track it ourselves.
+        if force or GLib.get_monotonic_time() / 1e6 >= self._leds_ignore_till:
             changed = False
             for attr, name in (("caps_on", "capslock"), ("num_on", "numlock")):
                 v = read_led(name)
@@ -1273,13 +1368,13 @@ class OSKewl(Gtk.Window):
                 self.refresh()
         return True
 
-    # ------------------------------------------------------------ key input
+    # Key input
     def play(self):
         if self.cfg["sound"]:
             self.player.play(self.cfg["sound_file"], self.cfg["sound_preset"])
 
     def on_pressed(self, widget):
-        kb = self.by_button[widget]
+        kb = self.btn_map[widget]
         kind = kb.spec["kind"]
         self.play()
         if kind in ("mod", "fn"):
@@ -1290,18 +1385,18 @@ class OSKewl(Gtk.Window):
             kb.set_classes(pressed=True)
             self.type_key(kb)
             self._cancel_repeat()
-            self._delay_src = GLib.timeout_add(400, self._start_repeat)
+            self._rep_delay_id = GLib.timeout_add(400, self._start_repeat)
 
     def on_released(self, widget, *args):
         self._cancel_repeat()
-        kb = self.by_button.get(widget)
+        kb = self.btn_map.get(widget)
         if kb is not None:
             kb.set_classes(pressed=False)
         return False
 
     def on_touch(self, widget, event):
-        # A cancelled touch fires neither "released" nor leave-notify, which
-        # would leave the key stuck highlighted — treat it as a release.
+        # A cancelled touch sends neither "released" nor leave-notify, and the
+        # key stays lit forever, so count it as a release.
         if event.type in (Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL):
             self.on_released(widget)
             widget.set_state_flags(Gtk.StateFlags.NORMAL, True)
@@ -1315,14 +1410,14 @@ class OSKewl(Gtk.Window):
         sticky = [m for m in MOD_CODES if self.state[m] == 1]
         self.uin.tap(code, sticky)
         self._repeat_code, self._repeat_mods = code, sticky
-        for m in list(self.state):                    # sticky keys fire once
+        for m in list(self.state):                    # Sticky ones get used up
             if self.state[m] == 1:
                 self.state[m] = 0
         self.refresh()
 
     def _start_repeat(self):
-        self._delay_src = None
-        self._repeat_src = GLib.timeout_add(100, self._repeat_tick)
+        self._rep_delay_id = None
+        self._rep_id = GLib.timeout_add(100, self._repeat_tick)
         return False
 
     def _repeat_tick(self):
@@ -1331,7 +1426,7 @@ class OSKewl(Gtk.Window):
         return True
 
     def _cancel_repeat(self):
-        for attr in ("_delay_src", "_repeat_src"):
+        for attr in ("_rep_delay_id", "_rep_id"):
             src = getattr(self, attr)
             if src:
                 GLib.source_remove(src)
@@ -1341,17 +1436,17 @@ class OSKewl(Gtk.Window):
         key = "fn" if kb.spec["kind"] == "fn" else kb.spec["code"]
         old = self.state[key]
         now = GLib.get_monotonic_time() / 1e6
-        window = self.cfg["lock_ms"] / 1000.0
-        if old == 0:                    # off -> sticky; start the double-click clock
+        dbl = self.cfg["lock_ms"] / 1000.0
+        if old == 0:                    # Start the double-click timer
             new = 1
-            self._mod_t[key] = now
-        elif old == 1:                  # a quick 2nd click locks; a slow one cancels
-            quick = window > 0 and now - self._mod_t.get(key, 0.0) <= window
-            new = 2 if quick else 0
-        else:                           # held -> off
+            self._sticky_time[key] = now
+        elif old == 1:                  # A fast 2nd click locks, a slow one cancels
+            fast = dbl > 0 and now - self._sticky_time.get(key, 0.0) <= dbl
+            new = 2 if fast else 0
+        else:                           # Was held, so let go
             new = 0
         self.state[key] = new
-        if key != "fn":                 # "held" = really holding the key down
+        if key != "fn":                 # Held = actually press the key and keep it down
             if new == 2:
                 self.uin.emit(key, 1)
             elif old == 2:
@@ -1365,11 +1460,11 @@ class OSKewl(Gtk.Window):
         else:
             self.num_on = not self.num_on
             code = KEY["NUMLOCK"]
-        self._lock_hold_until = GLib.get_monotonic_time() / 1e6 + 0.8
+        self._leds_ignore_till = GLib.get_monotonic_time() / 1e6 + 0.8
         self.uin.tap(code)
         self.refresh()
 
-    # ------------------------------------------------- OSK-specific keys
+    # OSK-specific keys
     def on_action(self, widget, kb):
         self.play()
         {"mvup": lambda: self._nudge(-1),
@@ -1394,7 +1489,7 @@ class OSKewl(Gtk.Window):
 
     def toggle_layout(self):
         new = "standard" if self.cfg["layout"] == "windows" else "windows"
-        GLib.idle_add(self._set_layout, new)   # after this key's click finishes
+        GLib.idle_add(self._set_layout, new)   # Has to wait until this click is finished
 
     def toggle_fade(self):
         self.faded = not self.faded
@@ -1416,11 +1511,11 @@ class OSKewl(Gtk.Window):
         except Exception:
             pass
 
-    # ------------------------------------------------------------- options
+    # Options
     def _set(self, key, value):
         self.cfg[key] = value
         if key == "font_scale":
-            self._px = (0, 0, 0)             # force a recompute on next allocate
+            self._px = (0, 0, 0)             # Makes on_grid_alloc redo the sizes
             self.queue_resize()
         if key == "glyph_case":
             self.refresh()
@@ -1454,8 +1549,8 @@ class OSKewl(Gtk.Window):
         dlg.add_button("Reset to defaults", Gtk.ResponseType.REJECT)
         dlg.add_button("Close", Gtk.ResponseType.CLOSE)
         grid = Gtk.Grid(column_spacing=12, row_spacing=8, margin=16)
-        # Scrollable so every option stays reachable on short screens; the
-        # Reset / Close buttons live outside it and are always visible.
+        # Scrolled so everything is reachable on small screens. Reset/Close are
+        # outside of it so they stay visible.
         sw = Gtk.ScrolledWindow()
         sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         sw.set_min_content_height(120)
@@ -1465,7 +1560,7 @@ class OSKewl(Gtk.Window):
         dlg.set_default_size(700, min(680, max(260, self._screen_height() - 160)))
         row = [0]
 
-        def heading(text):
+        def sect(text):
             lbl = Gtk.Label(xalign=0)
             lbl.set_markup("<b>%s</b>" % text)
             lbl.set_margin_top(6 if row[0] else 0)
@@ -1493,7 +1588,7 @@ class OSKewl(Gtk.Window):
                       lambda w: self._set(key, rgba_to_hex(w.get_rgba())))
             return b
 
-        heading("Layout")
+        sect("Layout")
         lc = Gtk.ComboBoxText()
         for lid, lname in LAYOUTS.items():
             lc.append(lid, lname)
@@ -1507,7 +1602,7 @@ class OSKewl(Gtk.Window):
         self._numpad_chk = chk
         add(None, chk)
 
-        def combo_for(key, choices):
+        def make_combo(key, choices):
             cb = Gtk.ComboBoxText()
             for cid, text in choices:
                 cb.append(cid, text)
@@ -1515,8 +1610,8 @@ class OSKewl(Gtk.Window):
             cb.connect("changed", lambda w: self._set(key, w.get_active_id()))
             return cb
 
-        heading("Keys")
-        gc = combo_for("glyph_case", [
+        sect("Keys")
+        gc = make_combo("glyph_case", [
             ("auto", "Follow Shift / Caps Lock"),
             ("upper", "Always capital (A B C…)"),
             ("lower", "Always lowercase (a b c…)")])
@@ -1532,7 +1627,7 @@ class OSKewl(Gtk.Window):
         add("Legend font", fb)
         add("Legend size (%)", spin("font_scale", 50, 200, 5))
 
-        heading("Modifier keys (Shift, Ctrl, Alt, ⊞, Fn)")
+        sect("Modifier keys (Shift, Ctrl, Alt, ⊞, Fn)")
         lk = spin("lock_ms", 0, 3000, 50)
         lk.set_tooltip_text(
             "Click a modifier once: it applies to the next key. Click it again "
@@ -1540,7 +1635,7 @@ class OSKewl(Gtk.Window):
             "and it simply turns off. 0 = never lock (sticky / off only).")
         add("Double-click time to lock (ms, 0 = never)", lk)
 
-        heading("Colours")
+        sect("Colours")
         add("Background", color("bg"))
         add("Key", color("key"))
         add("Text", color("text"))
@@ -1560,9 +1655,9 @@ class OSKewl(Gtk.Window):
                    lambda w: self._set("bg_opacity", round(w.get_value() / 100, 2)))
         add("Background opacity (%)", sb)
 
-        heading("Images (PNG / JPEG)")
+        sect("Images (PNG / JPEG)")
 
-        def image_picker(key):
+        def image_row(key):
             box = Gtk.Box(spacing=6)
             btn, clr = Gtk.Button(), Gtk.Button(label="Clear")
             btn.set_hexpand(True)
@@ -1601,21 +1696,32 @@ class OSKewl(Gtk.Window):
             box.pack_start(clr, False, False, 0)
             return box
 
-        add("Background image", image_picker("bg_image"))
-        add("Background scaling", combo_for("bg_scale", [
+        add("Background image", image_row("bg_image"))
+        add("Background scaling", make_combo("bg_scale", [
             ("cover", "Fill (keep proportions, crop)"),
             ("stretch", "Stretch to window"),
             ("contain", "Fit (keep proportions, letterbox)")]))
-        add("Keycap image", image_picker("keycap_image"))
-        add("Keycap scaling", combo_for("keycap_mode", [
+        add("Keycap image", image_row("keycap_image"))
+        add("Keycap scaling", make_combo("keycap_mode", [
             ("slice", "Keep edges, stretch middle (9-slice)"),
             ("stretch", "Stretch whole image")]))
         add("Keycap edge size (image px, 0 = auto)", spin("keycap_slice", 0, 400))
+        tint_row = Gtk.Box(spacing=8)
+        tint_chk = Gtk.CheckButton(label="Tint keys")
+        tint_chk.set_active(self.cfg["keycap_tint_on"])
+        tint_chk.connect("toggled",
+                         lambda w: self._set("keycap_tint_on", w.get_active()))
+        tint_row.pack_start(tint_chk, False, False, 0)
+        tint_row.pack_start(color("keycap_tint"), False, False, 0)
+        tint_row.set_tooltip_text(
+            "Only has an effect with a keycap image and key opacity below 100%. "
+            "The more see-through the keys are, the stronger the tint.")
+        add("Keycap tint colour", tint_row)
         if GdkPixbuf is None:
-            add(None, Gtk.Label(xalign=0, label="GdkPixbuf is not available — "
+            add(None, Gtk.Label(xalign=0, label="GdkPixbuf is not available - "
                                 "keycap images are disabled."))
 
-        heading("Title bar")
+        sect("Title bar")
         ent = Gtk.Entry()
         ent.set_text(self.cfg["title"])
         ent.set_placeholder_text("(no title)")
@@ -1640,21 +1746,21 @@ class OSKewl(Gtk.Window):
             "OSKewl is running, because the keyboard deliberately never takes "
             "focus (required for it to work correctly in Plasma). To set a "
             "custom title, close OSKewl and edit the <tt>title =</tt> line in "
-            "<tt>%s</tt> by hand — the file is rewritten on exit, so edit it "
+            "<tt>%s</tt> by hand - the file is rewritten on exit, so edit it "
             "while OSKewl is closed. The buttons above work normally.</small>"
             % GLib.markup_escape_text(CONFIG_FILE))
         add(None, note)
         add("Title text size (px)", spin("title_px", 8, 24))
         add("Title bar height (px)", spin("title_h", 18, 60))
 
-        heading("Sound")
+        sect("Sound")
         snd = Gtk.CheckButton(label="Play a click on every key")
         snd.set_active(self.cfg["sound"])
         snd.connect("toggled", lambda w: self._set("sound", w.get_active()))
         add(None, snd)
-        # A plain button that opens a file dialog on demand. (GtkFileChooserButton
-        # builds its dialog eagerly, starting in a location GTK can't measure,
-        # which logs "Failed to measure available space".)
+        # A plain button that opens the dialog only when clicked.
+        # GtkFileChooserButton builds its dialog up front and spams
+        # "Failed to measure available space".
         fc = Gtk.Button()
 
         def fc_label():
@@ -1688,7 +1794,7 @@ class OSKewl(Gtk.Window):
         combo.set_active_id(self.cfg["sound_preset"])
 
         def on_preset(w):
-            self._set("sound_file", "")          # picking a built-in drops the custom file
+            self._set("sound_file", "")          # Choosing a built-in clears the custom file
             fc_label()
             self._set("sound_preset", w.get_active_id())
             self.player.play("", self.cfg["sound_preset"])
@@ -1711,12 +1817,67 @@ class OSKewl(Gtk.Window):
         add(None, btns)
         if not self.player.cmd:
             note = Gtk.Label(xalign=0, label="No audio player found "
-                             "(pw-play, paplay or aplay) — sound is unavailable.")
+                             "(pw-play, paplay or aplay) - sound is unavailable.")
             add(None, note)
+
+        sect("Key labels")
+        cat = label_catalog()
+        intro = Gtk.Label(xalign=0)
+        intro.set_line_wrap(True)
+        intro.set_max_width_chars(80)
+        intro.set_markup(
+            "<small>Every key whose legend is longer than one character (Esc, "
+            "Shift, Numpad, Options, F1-F12 ...) can show different text. Like "
+            "the title text, this can't be typed into this window, because "
+            "OSKewl never takes keyboard focus. Instead:\n"
+            "  1. Close OSKewl. The settings file is rewritten when it quits, "
+            "so edits made while it runs are lost.\n"
+            "  2. Open <tt>%s</tt> in a text editor and find the "
+            "<tt>[labels]</tt> section. It has one line for each key name in "
+            "the table below.\n"
+            "  3. Type the new legend after the <tt>=</tt>, for example "
+            "<tt>numpad = Num</tt>. An empty line keeps the default.\n"
+            "  4. Save the file and start OSKewl again.\n\n"
+            "Legends can be up to %d characters. This only changes the text "
+            "drawn on the key, not what it types. Left and right Shift, Ctrl "
+            "and Alt are separate keys (<tt>leftshift</tt>, "
+            "<tt>rightshift</tt> ...). <tt>f1</tt> to <tt>f12</tt> are the "
+            "keys on the standard layout and also the number row legends "
+            "while Fn is on. A name that isn't in the table is ignored, with "
+            "a warning on the terminal. \"Reset to defaults\" doesn't touch "
+            "these.</small>" % (GLib.markup_escape_text(CONFIG_FILE), LABEL_MAX))
+        add(None, intro)
+        tbl = Gtk.Grid(column_spacing=16, row_spacing=3)
+        for c, head in enumerate(("Key name", "Shown now", "Default", "Where")):
+            h = Gtk.Label(xalign=0)
+            h.set_markup("<b>%s</b>" % head)
+            tbl.attach(h, c, 0, 1, 1)
+        self._label_cells = {}
+        for r, (kid, e) in enumerate(cat.items(), 1):
+            defaults = e["defaults"]
+            if len(set(defaults.values())) == 1:
+                dtext = next(iter(defaults.values()))
+            else:                             # Differs per layout, e.g. Caps / Caps Lock
+                dtext = "   ".join("%s (%s)" % (t, LAYOUTS[l])
+                                   for l, t in defaults.items())
+            where = ", ".join(LAYOUTS[l] + (" (Fn layer)" if l in e["fn"] else "")
+                              for l in defaults)
+            if e["x11"]:
+                where += " - X11 only"
+            kl = Gtk.Label(xalign=0)
+            kl.set_markup("<tt>%s</tt>" % GLib.markup_escape_text(kid))
+            cur = Gtk.Label(xalign=0)
+            cur.set_markup(self._label_markup(kid))
+            self._label_cells[kid] = cur
+            tbl.attach(kl, 0, r, 1, 1)
+            tbl.attach(cur, 1, r, 1, 1)
+            tbl.attach(Gtk.Label(xalign=0, label=dtext), 2, r, 1, 1)
+            tbl.attach(Gtk.Label(xalign=0, label=where), 3, r, 1, 1)
+        add(None, tbl)
 
         def on_response(d, resp):
             if resp == Gtk.ResponseType.REJECT:
-                keep = {k: self.cfg[k] for k in ("width", "height")}
+                keep = {k: self.cfg[k] for k in ("width", "height", "labels")}
                 self.cfg = dict(DEFAULTS)
                 self.cfg.update(keep)
                 self._apply_title()
@@ -1734,16 +1895,17 @@ class OSKewl(Gtk.Window):
             self._opt = None
             self._numpad_chk = None
             self._layout_cmb = None
+            self._label_cells = {}
 
         dlg.connect("response", on_response)
         dlg.connect("destroy", on_destroy)
         self._opt = dlg
         dlg.show_all()
 
-    # ------------------------------------------------------------ shutdown
+    # Shutdown
     def on_destroy(self, *_):
         self._cancel_repeat()
-        for m in MOD_CODES:                  # never leave a key stuck down
+        for m in MOD_CODES:                  # Don't leave a key stuck down
             if self.state[m] == 2:
                 self.uin.emit(m, 0)
         save_config(self.cfg)
