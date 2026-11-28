@@ -31,12 +31,12 @@ OSKewl ('OSK-ewl' -> 'oss-cool' -> ol' skool...you get the idea) is meant to be 
 - Keyboard can be resized, and keys dynamically change to fit
 - Keys can have varying-thickness borders, use any installed font for glyphs, and you can alter the colors for background, keys, borders, and glyphs.
 - Translucency sliders for keys and background
+- When using images to skin keys, you can also tint them with a color when they have any non-solid translucency
 - Backgrounds can be 'skinned' with a .png or .jpg and that gets stretched or cropped to fit the keyboard window.
 - Keys can also be skinned, but they ALL use a single image in common.  They can also be automatically cut up and/or scaled to fit any of the key sizes with or without gross stretching of the entire image
 - Custom key 'click' sound feedback can be enabled, either using one of the included simple sounds, or using your own .wav
 - NumPad area can be toggled
-- [IN PROGRESS] Adding a way to change the shown glyphs/names keys in order to avoid stuff like font scaling turning 'Options' and other "wide" words on keys that end up abbreviating into 'Opt...' and so-on.  Maybe have a way to pick Unicode characters or something so graphical glyphs can also be used.
-  - If the above gets done and I figure out a decent way to do a character picker, then I will probably also add a way to flip to a totally custom layout grid that can type custom characters (think the 'emoji keyboard' function in a lot of phone keyboards)
+- You can customize what longer keys (ex: "NumPad", "Options", etc) actually say on them so you can avoid ',,,' abbreviations when resizing if you want, or you can use UNICODE graphical characters (like a making the "Options" key show a Unicode 'Gear' (⚙) character for example)
 - Two layouts to switch between...the original Windows OSK layout, or a more accurate-to-a-physical-keyboard 104 key-ish layout.
 
 <img width="1243" height="337" alt="OSKewl_custom0" src="https://github.com/user-attachments/assets/5367d249-6803-4989-96d4-11d8c160e963" />
